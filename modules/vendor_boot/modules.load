@@ -1,3 +1,4 @@
+qcom_dynamic_ramoops.ko
 gh_arm_drv.ko
 sched-walt.ko
 lenovohyperSched.ko
