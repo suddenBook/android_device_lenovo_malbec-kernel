@@ -33,6 +33,22 @@ An **unmodified Google GKI 2.0 image**:
 Nothing is built from source. All hardware support arrives as loadable modules,
 so the stock image is reused verbatim and only the modules are packaged.
 
+**Two deliberate deviations from stock, so that "verbatim" is not read too widely.**
+Both exist to make a failed first boot diagnosable; verify with
+`python3 ../../../../work/scripts/34-patch-dtb-ramoops.py --check`.
+
+1. `images/dtbs/19_*TunaP*.dtb` is **patched**. Stock's `/soc/qcom_ramoops` node has
+   only `pmsg-size`, so `console-ramoops` and `dmesg-ramoops` are never produced;
+   the patch adds `console-size` and `record-size` and grows
+   `/reserved-memory/ramoops-region` from 2 to 4 MiB. DTBs 1-18 are byte-identical
+   to the factory blob, and `images/kernel` and `images/dtbo.img` are byte-identical
+   to `Factory/image/`.
+2. `modules/vendor_boot/modules.load` prepends **`qcom_dynamic_ramoops.ko`**. Stock
+   loads it only from `vendor_dlkm` (second stage), which leaves the first-stage
+   window uncovered — and that window is exactly where an early boot failure lives.
+   It stays in the `vendor_dlkm` list too; the second `insmod` returns `EEXIST`,
+   which libmodprobe tolerates.
+
 ## Contents
 
 ```
