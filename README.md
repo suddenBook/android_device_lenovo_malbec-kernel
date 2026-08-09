@@ -41,7 +41,8 @@ Both exist to make a failed first boot diagnosable; verify with
    only `pmsg-size`, so `console-ramoops` and `dmesg-ramoops` are never produced;
    the patch adds `console-size` and `record-size` and grows
    `/reserved-memory/ramoops-region` from 2 to 4 MiB. DTBs 1-18 are byte-identical
-   to the factory blob, and `images/kernel` and `images/dtbo.img` are byte-identical
+   to the factory blob, `images/kernel` is byte-identical, and `images/dtbo.img`
+   is byte-identical to the first 36,185,879 bytes of it — see the note below
    to `Factory/image/`.
 2. `modules/vendor_boot/modules.load` prepends **`qcom_dynamic_ramoops.ko`**. Stock
    loads it only from `vendor_dlkm` (second stage), which leaves the first-stage
@@ -54,7 +55,7 @@ Both exist to make a failed first boot diagnosable; verify with
 ```
 images/
 ├── kernel        GKI Image (35 MB)
-├── dtbo.img      stock dtbo, used via BOARD_PREBUILT_DTBOIMAGE (48 MB)
+├── dtbo.img      stock dtbo, used via BOARD_PREBUILT_DTBOIMAGE (34.5 MB, truncated)
 └── dtbs/         19 device tree blobs
 modules/
 ├── vendor_dlkm/  300 .ko + modules.load + modules.blocklist
@@ -113,3 +114,44 @@ nvt_touch.ko              qca_cld3_*.ko
 - [`LineageOS/android_kernel_qcom_sm8750-devicetrees`](https://github.com/LineageOS/android_kernel_qcom_sm8750-devicetrees) — carries `qcom/tunap.dts` and `qcom/tunap.dtsi`
 - [`LineageOS/android_kernel_qcom_sm8750-modules`](https://github.com/LineageOS/android_kernel_qcom_sm8750-modules)
 - [`oppo-source/android_kernel_modules_and_devicetree_oppo_sm8735`](https://github.com/oppo-source/android_kernel_modules_and_devicetree_oppo_sm8735)
+
+
+## ⚠️ `dtbo.img` is truncated, deliberately, and it is still exactly what stock signs
+
+The factory `dtbo.img` in the image set is a raw 48 MiB **partition dump**, not a
+34.5 MiB image. `dt_table_header.total_size` says 36,185,879 and the remaining
+14,145,769 bytes are the partition's unused tail — all zero except 246 bytes at
+offset +2281, which are a leftover `AVB0` header from a previous flash.
+
+That is not a judgement call. Stock's own AVB descriptor covers the short form,
+and the arithmetic reproduces byte-for-byte:
+
+```
+$ avbtool info_image --image vbmeta.img      # the FACTORY vbmeta
+  Hash descriptor:
+    Image Size:            36185879 bytes
+    Hash Algorithm:        sha256
+    Partition Name:        dtbo
+    Digest:                acb1ac17e6eb2c7fdd3912b2e9694b5cd1ea5eb20aee5382516daf3ab86b6c5d
+
+$ sha256( salt ‖ dtbo[0 : 36185879] )
+    acb1ac17e6eb2c7fdd3912b2e9694b5cd1ea5eb20aee5382516daf3ab86b6c5d      ← match
+```
+
+Over the full 50,331,648 bytes it does not match. So the tail was never part of
+what the bootloader verifies; it was 13.49 MiB hashed, flashed and carried in
+every OTA payload for nothing. ABL reads `dt_table_header` and ignores anything
+past `total_size`, which is why it was inert rather than fatal.
+
+`BOARD_DTBOIMG_PARTITION_SIZE := 52428800` is unchanged and correct — that is the
+partition, not the image.
+
+Re-derive after any firmware update:
+
+```
+python3 - <<'EOF'
+import struct
+print(struct.unpack('>II', open('images/dtbo.img','rb').read(8))[1])
+EOF
+truncate -s <that number> images/dtbo.img
+```
