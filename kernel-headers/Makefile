@@ -54,9 +54,59 @@
 VERSION = 6
 PATCHLEVEL = 6
 
+# ★ $(O) MUST BE ABSOLUTE, and this target refuses to run if it is not.
+#
+# `make -C <dir>` runs with the cwd set to <dir> -- i.e. to THIS directory. A
+# relative $(O) is therefore resolved against the source tree, not the build
+# top, and the whole UAPI header set is silently written to
+#
+#     device/lenovo/malbec-kernel/kernel-headers/<O>/usr/include/
+#
+# while the real genDir stays empty. Nothing fails at that moment. The build
+# runs on for another hour and dies at 74% with
+#
+#     hardware/qcom-caf/sm8750/dataipa/ipanat/inc/ipa_nat_utils.h:71:10:
+#         fatal error: 'linux/msm_ipa.h' file not found
+#
+# which names a file nobody edited, in a module nobody touched, and points at
+# nothing. Session 30 lost a 1h13m build to exactly this and then had to delete
+# 1003 stray headers out of this directory -- where, left in place, the `rsync`
+# below would have copied them into the next build's genDir as well.
+#
+# Whether $(O) arrives absolute is decided by ONE line of upstream LineageOS,
+# vendor/lineage/config/BoardConfigKernel.mk:273-276:
+#
+#     OUT_DIR_PREFIX := $(shell echo $(OUT_DIR) | sed -e 's|/target/.*$$||g')
+#     KERNEL_BUILD_OUT_PREFIX :=
+#     ifeq ($(OUT_DIR_PREFIX),out)
+#         KERNEL_BUILD_OUT_PREFIX := $(BUILD_TOP)/
+#     endif
+#
+# It prepends $(BUILD_TOP)/ only when OUT_DIR is literally `out`, on the
+# assumption that any other OUT_DIR was given as an absolute path. A RELATIVE
+# OUT_DIR that is not `out` -- `OUT_DIR=out-final-r1`, the obvious way to keep a
+# release build beside a working one -- satisfies neither branch and produces a
+# relative $(O). Upstream would be correct as
+# `ifeq ($(filter /%,$(OUT_DIR)),)`, but this tree does not patch upstream, so
+# the invariant is enforced here and in work/scripts/40-build.sh instead.
+#
+# The other half of the trap: OUT_DIR cannot simply be made absolute to dodge
+# this, because Soong then rejects platform_testing/Android.bp:255
+# ("continuous_native_tests ... Path is outside directory"). `out` is the only
+# value that satisfies both. 40-build.sh pins it; this is the backstop.
 headers_install:
+	@case '$(O)' in \
+	    /*) ;; \
+	    *) echo "" >&2; \
+	       echo "!! kernel-headers: O='$(O)' is RELATIVE and must be absolute." >&2; \
+	       echo "!! Building with a relative OUT_DIR other than 'out' does this." >&2; \
+	       echo "!! Fix: build via work/scripts/40-build.sh, or set OUT_DIR=out." >&2; \
+	       echo "!! (see the comment above this target for the whole story)" >&2; \
+	       echo "" >&2; \
+	       exit 1 ;; \
+	esac
 	@mkdir -p $(O)/usr/include
-	@rsync -mrq $(shell pwd)/* $(O)/usr/include
+	@rsync -mrq --exclude='out' --exclude='out-*' $(shell pwd)/* $(O)/usr/include
 
 all:
 	@true
